@@ -95,10 +95,9 @@ fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                 };
                 model.curr_pos = Some(new_pos.clone());
 
-                setMapCenter(&model.map, new_pos.lati, new_pos.longi);
-                setMapZoom(&model.map, 15.0);
-
                 if model_pos_was_empty {
+                    setMapCenter(&model.map, new_pos.lati, new_pos.longi);
+                    setMapZoom(&model.map, 15.0);
                     // start sending and getting positions
                     orders.perform_cmd(get_other_people_position(new_pos.clone()));
                 }
