@@ -183,7 +183,7 @@ fn view(_model: &Model) -> impl View<Msg> {
 }
 
 fn get_other_people_position(pos: CurrentPos) -> impl Future<Item = Msg, Error = Msg> {
-    let url = "http://li582-122.members.linode.com/my_position";
+    let url = "https://the-beta.site/my_position";
     Request::new(url)
         .method(Method::Post)
         .body_json(&pos)
