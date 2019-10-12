@@ -1,9 +1,11 @@
 #[macro_use]
 extern crate seed;
+
+use futures::Future;
 use seed::prelude::*;
-
-
-use wasm_bindgen::prelude::*;
+use seed::{Method, Request};
+use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsCast;
 
 #[wasm_bindgen]
 extern "C" {
@@ -28,28 +30,43 @@ extern "C" {
 //    fn render(this: &MyClass) -> String;
 }
 
-
 // Model
 
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct CurrentPos {
+    pub lati: f64,
+    pub longi: f64,
+    pub name: String,
+}
+
 struct Model {
-    pub curr_lat: Option<f64>,
-    pub curr_longi: Option<f64>,
+    pub name: Option<String>,
+    pub curr_pos: Option<CurrentPos>,
+    pub other_pos: Vec<CurrentPos>,
     pub markers: Vec<GMarker>,
     pub map: GMap,
 }
 
-use wasm_bindgen::JsCast;
-use seed::document;
-
-
+impl Model {
+    pub fn update_map(&mut self) {
+        while let Some(marker) = self.markers.pop() {
+            removeMarker(marker);
+            log!("Removed marker");
+        }
+        for pos in self.other_pos.clone() {
+            let new_marker = setMarker(&self.map, pos.lati, pos.longi, pos.name.into());
+            self.markers.push(new_marker);
+        }
+    }
+}
 // Update
-
-
 
 #[derive(Clone)]
 enum Msg {
     StartGeoTracking,
-    NewPos(web_sys::Position)
+    NewPos(web_sys::Position),
+    DataFetched(seed::fetch::ResponseDataResult<Vec<CurrentPos>>),
+    NewName(String),
 }
 
 fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
@@ -60,32 +77,72 @@ fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                 app.update(msg_mapper(Msg::NewPos(pos)));
             }));
             let cb_as_js = cb.as_ref().unchecked_ref();
-            let geolocation = web_sys::window().unwrap().navigator().geolocation().unwrap();
+            let geolocation = web_sys::window()
+                .unwrap()
+                .navigator()
+                .geolocation()
+                .unwrap();
             geolocation.watch_position(&cb_as_js).unwrap();
             cb.forget();
         }
         Msg::NewPos(pos) => {
-            model.curr_lat = Some(pos.coords().latitude());
-            model.curr_longi = Some(pos.coords().longitude());
-            log!("Lat {}", model.curr_lat);
-            log!("Longitude {}", model.curr_longi);
-            while let Some(marker) = model.markers.pop(){
-                removeMarker(marker);
-                log!("Removed marker");
+            if let Some(name) = model.name.clone() {
+                let model_pos_was_empty = model.curr_pos.is_none();
+                let new_pos = CurrentPos {
+                    lati: pos.coords().latitude(),
+                    longi: pos.coords().longitude(),
+                    name,
+                };
+                model.curr_pos = Some(new_pos.clone());
+
+                setMapCenter(&model.map, new_pos.lati, new_pos.longi);
+                setMapZoom(&model.map, 15.0);
+
+                if model_pos_was_empty {
+                    // start sending and getting positions
+                    orders.perform_cmd(get_other_people_position(new_pos.clone()));
+                }
             }
-            let marker = setMarker(&model.map, model.curr_lat.unwrap(), model.curr_longi.unwrap(), "Test".into());
-            model.markers.push(marker);
-            setMapCenter(&model.map, model.curr_lat.unwrap(), model.curr_longi.unwrap());
-            setMapZoom(&model.map, 15.0);
+        }
+        Msg::DataFetched(resp) => match resp {
+            Ok(res) => {
+                log!("Got", res);
+                let my_position = model.curr_pos.clone().unwrap();
+                let futur = gloo::timers::future::TimeoutFuture::new(1_000)
+                    .then(|_| get_other_people_position(my_position));
+                model.other_pos = res;
+                orders.perform_cmd(futur);
+                model.update_map();
+            }
+            Err(err) => {
+                log!("Got", err);
+            }
+        },
+        Msg::NewName(name) => {
+            log!("Name: ", name);
+            model.name = Some(name);
         }
     }
 }
 
 // View
 
-fn view(model: &Model) -> impl View<Msg> {
+fn view(_model: &Model) -> impl View<Msg> {
     div![
         class!["container"],
+        div![
+            class!["container"],
+            div![div![
+                class!["form-group"],
+                h1![class!["text-center"], "Nome?"],
+                input![
+                    id!("NameInput"),
+                    class!["form-control"],
+                    attrs! {At::Type => "text", At::Placeholder => "Boga"},
+                    input_ev(Ev::Input, Msg::NewName)
+                ]
+            ],]
+        ],
         nav![
             class![
                 "navbar",
@@ -120,25 +177,30 @@ fn view(model: &Model) -> impl View<Msg> {
             ]
         ]
     ]
-} //fill="white" stroke-width="0.5" stroke="#28a745"  fill-rule="evenodd"
-fn init(_: Url, orders: &mut impl Orders<Msg>) -> Init<Model> {
-    orders
-        .send_msg(Msg::StartGeoTracking);
-    let map = initMap();
-    Init::new(Model{
-        curr_lat: None,
-        curr_longi: None,
-        markers: vec![],
-        map
-    })
+}
 
+fn get_other_people_position(pos: CurrentPos) -> impl Future<Item = Msg, Error = Msg> {
+    let url = "http://li582-122.members.linode.com/my_position";
+    Request::new(url)
+        .method(Method::Post)
+        .body_json(&pos)
+        .fetch_json_data(Msg::DataFetched)
+}
+
+fn init(_: Url, orders: &mut impl Orders<Msg>) -> Init<Model> {
+    orders.send_msg(Msg::StartGeoTracking);
+    let map = initMap();
+    Init::new(Model {
+        name: None,
+        curr_pos: None,
+        other_pos: vec![],
+        markers: vec![],
+        map,
+    })
 }
 
 #[wasm_bindgen(start)]
 pub fn render() {
-    let el = web_sys::window().unwrap().document().unwrap().get_element_by_id("app").unwrap();
-    log!(el);
-    seed::App::build(init, update, view)
-        .finish()
-        .run();
+    log!("Seed started.");
+    seed::App::build(init, update, view).finish().run();
 }
