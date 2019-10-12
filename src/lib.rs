@@ -120,7 +120,10 @@ fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
         },
         Msg::NewName(name) => {
             log!("Name: ", name);
-            model.name = Some(name);
+            model.name = Some(name.clone());
+            if  let Some(cur_pos) = &mut model.curr_pos{
+                cur_pos.name = name;
+            }
         }
     }
 }
