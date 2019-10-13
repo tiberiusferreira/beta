@@ -27,6 +27,7 @@ features = [
 'Navigator',
 'Geolocation',
 'Position',
+'PositionError',
 'Coordinates',
 'PositionOptions'
 ]

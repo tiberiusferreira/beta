@@ -45,6 +45,7 @@ struct Model {
     pub other_pos: Vec<CurrentPos>,
     pub markers: Vec<GMarker>,
     pub map: GMap,
+    pub err_msg: Option<String>
 }
 
 impl Model {
@@ -65,6 +66,7 @@ impl Model {
 enum Msg {
     StartGeoTracking,
     NewPos(web_sys::Position),
+    PosErr(web_sys::PositionError),
     DataFetched(seed::fetch::ResponseDataResult<Vec<CurrentPos>>),
     NewName(String),
 }
@@ -72,18 +74,25 @@ enum Msg {
 fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
     match msg {
         Msg::StartGeoTracking => {
-            let (app, msg_mapper) = (orders.clone_app(), orders.msg_mapper());
+            let (app_1, msg_mapper_1) = (orders.clone_app(), orders.msg_mapper());
+            let (app_2, msg_mapper_2) = (orders.clone_app(), orders.msg_mapper());
             let cb = Closure::new(Box::new(move |pos: web_sys::Position| {
-                app.update(msg_mapper(Msg::NewPos(pos)));
+                app_1.update(msg_mapper_1(Msg::NewPos(pos)));
+            }));
+
+            let err_cb = Closure::new(Box::new(move |pos_err: web_sys::PositionError| {
+                app_2.update(msg_mapper_2(Msg::PosErr(pos_err)));
             }));
             let cb_as_js = cb.as_ref().unchecked_ref();
+            let cb_as_js_err = err_cb.as_ref().unchecked_ref();
             let geolocation = web_sys::window()
                 .unwrap()
                 .navigator()
                 .geolocation()
                 .unwrap();
-            geolocation.watch_position(&cb_as_js).unwrap();
+            geolocation.watch_position_with_error_callback(&cb_as_js, Some(&cb_as_js_err)).unwrap();
             cb.forget();
+            err_cb.forget();
         }
         Msg::NewPos(pos) => {
             if let Some(name) = model.name.clone() {
@@ -123,19 +132,32 @@ fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
             if  let Some(cur_pos) = &mut model.curr_pos{
                 cur_pos.name = name;
             }
+        },
+        Msg::PosErr(err) => {
+            let code = err.message();
+            model.err_msg = Some(code);
         }
     }
 }
 
 // View
 
-fn view(_model: &Model) -> impl View<Msg> {
+fn view(model: &Model) -> impl View<Msg> {
+    let err_2 = match &model.err_msg{
+        None => {
+            seed::empty()
+        },
+        Some(err) => {
+            h1![class!["text-center"], err.clone()]
+        },
+    };
     div![
         class!["container"],
         div![
             class!["container"],
             div![div![
                 class!["form-group"],
+                {err_2},
                 h1![class!["text-center"], "Nome?"],
                 input![
                     id!("NameInput"),
@@ -198,6 +220,7 @@ fn init(_: Url, orders: &mut impl Orders<Msg>) -> Init<Model> {
         other_pos: vec![],
         markers: vec![],
         map,
+        err_msg: None
     })
 }
 
